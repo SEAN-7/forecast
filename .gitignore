@@ -128,3 +128,5 @@ cython_debug/
 
 # Temporary files
 /tmp/
+*.csv
+*_report.txt

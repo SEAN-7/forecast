@@ -53,6 +53,11 @@ class AdaptiveModel:
         if lags is None:
             lags = [1, 2, 3, 7]  # Default lag periods
         
+        # Adjust parameters for small datasets
+        if len(data) < 10:
+            lags = [1]  # Only use lag 1 for very small datasets
+            window_size = min(window_size, len(data) // 2)  # Reduce window size
+        
         df = data.copy()
         
         # Ensure we have a numeric target
@@ -62,16 +67,18 @@ class AdaptiveModel:
         # Create lag features
         feature_names = []
         for lag in lags:
-            col_name = f'lag_{lag}'
-            df[col_name] = df[target_column].shift(lag)
-            feature_names.append(col_name)
+            if lag < len(df):  # Only create lag if we have enough data
+                col_name = f'lag_{lag}'
+                df[col_name] = df[target_column].shift(lag)
+                feature_names.append(col_name)
         
         # Create rolling statistics
         rolling_stats = ['mean', 'std', 'min', 'max']
         for stat in rolling_stats:
-            col_name = f'rolling_{stat}_{window_size}'
-            df[col_name] = getattr(df[target_column].rolling(window=window_size), stat)()
-            feature_names.append(col_name)
+            if window_size <= len(df):  # Only create rolling stats if we have enough data
+                col_name = f'rolling_{stat}_{window_size}'
+                df[col_name] = getattr(df[target_column].rolling(window=window_size), stat)()
+                feature_names.append(col_name)
         
         # Create time-based features if timestamp column exists
         if 'timestamp' in df.columns:
@@ -89,6 +96,13 @@ class AdaptiveModel:
         
         # Drop rows with NaN values (caused by lags and rolling windows)
         df_clean = df.dropna()
+        
+        # If no data remains, create minimal features
+        if len(df_clean) == 0:
+            # Use original data with just trend feature
+            df_clean = df[['timestamp', target_column, 'trend']].copy() if 'timestamp' in df.columns else df[[target_column, 'trend']].copy()
+            feature_names = ['trend']
+            df_clean = df_clean.dropna()
         
         if len(df_clean) == 0:
             raise ValueError("No valid data remaining after feature engineering")
@@ -174,22 +188,36 @@ class AdaptiveModel:
         
         for step in range(horizon):
             # Prepare features for the current step
-            X, _ = self.prepare_features(prediction_data, target_column)
-            
-            if len(X) == 0:
-                # If we can't create features, use the last value
+            try:
+                X, _ = self.prepare_features(prediction_data, target_column)
+                
+                if len(X) == 0:
+                    # If we can't create features, use the last value
+                    last_value = prediction_data[target_column].iloc[-1]
+                    predictions.append(last_value)
+                else:
+                    # Ensure features match training features
+                    if X.shape[1] != len(self.feature_names):
+                        # Pad or truncate features to match training
+                        if X.shape[1] < len(self.feature_names):
+                            padding = np.zeros((X.shape[0], len(self.feature_names) - X.shape[1]))
+                            X = np.hstack([X, padding])
+                        else:
+                            X = X[:, :len(self.feature_names)]
+                    
+                    # Scale features and predict
+                    X_scaled = self.scaler.transform(X[-1:])  # Use only the most recent observation
+                    
+                    if hasattr(self.model, 'predict'):
+                        pred = self.model.predict(X_scaled)[0]
+                    else:
+                        pred = self.model(X_scaled[0])
+                    
+                    predictions.append(pred)
+            except Exception:
+                # Fallback: use last value
                 last_value = prediction_data[target_column].iloc[-1]
                 predictions.append(last_value)
-            else:
-                # Scale features and predict
-                X_scaled = self.scaler.transform(X[-1:])  # Use only the most recent observation
-                
-                if hasattr(self.model, 'predict'):
-                    pred = self.model.predict(X_scaled)[0]
-                else:
-                    pred = self.model(X_scaled[0])
-                
-                predictions.append(pred)
             
             # Add the prediction to the data for next step
             new_row = prediction_data.iloc[-1:].copy()
