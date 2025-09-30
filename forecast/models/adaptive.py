@@ -309,34 +309,6 @@ class AdaptiveModel:
         if len(data) < 10:
             return data[target_column].std() if len(data) > 1 else 1.0
         
-        # Use the last 20% of data for error estimation
-        split_point = max(1, int(len(data) * 0.8))
-        train_data = data.iloc[:split_point]
-        test_data = data.iloc[split_point:]
-        
-        try:
-            # Create a temporary model for error estimation
-            temp_model = AdaptiveModel(self.algorithm, self.parameters)
-            temp_model.fit(train_data, target_column)
-            
-            # Make predictions on test data
-            predictions = []
-            for i in range(len(test_data)):
-                pred_data = pd.concat([train_data, test_data.iloc[:i+1]], ignore_index=True)
-                if len(pred_data) > len(train_data):
-                    pred_result = temp_model.predict(pred_data.iloc[:-1], horizon=1, target_column=target_column)
-                    predictions.append(pred_result['predictions'][0])
-                else:
-                    predictions.append(test_data[target_column].iloc[i])
-            
-            # Calculate error
-            actual = test_data[target_column].values
-            if len(predictions) == len(actual):
-                errors = np.abs(np.array(predictions) - actual)
-                return np.std(errors) if len(errors) > 1 else 1.0
-            
-        except Exception:
-            pass
-        
-        # Fallback to simple standard deviation
-        return data[target_column].std() if len(data) > 1 else 1.0
+        # Simple error estimation using recent data variance
+        recent_data = data[target_column].tail(min(20, len(data)))
+        return recent_data.std() if len(recent_data) > 1 else 1.0
